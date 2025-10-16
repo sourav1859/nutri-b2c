@@ -1,205 +1,206 @@
+
 "use client"
 
-import Image from "next/image"
 import { useParams, useRouter } from "next/navigation"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiGetRecipe, apiToggleSave } from "@/lib/api"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Separator } from "@/components/ui/separator"
-import { ArrowLeft, Clock, Users, Flame, Heart, Share2 } from "lucide-react"
+import { ArrowLeft } from "lucide-react"
 import { StartCookingOverlay } from "@/components/start-cooking-overlay"
-import { useState } from "react"
+import { RecipeHero } from "@/components/recipe-hero"
+import { RecipeTabs } from "@/components/recipe-tabs"
+import { useState, useEffect, useRef } from "react"
 import { useToast } from "@/hooks/use-toast"
-import { AppHeader } from "@/components/app-header"
+import { useFavorites } from "@/hooks/use-favorites"
+import { useHistory } from "@/hooks/use-history"
 
 export default function RecipeDetailPage() {
-  const { id } = useParams<{ id: string }>()
   const router = useRouter()
-  const qc = useQueryClient()
+  const params = useParams() as { id?: string }
+  const id = params?.id ?? ""
   const { toast } = useToast()
+  const queryClient = useQueryClient()
 
-  const { data: recipe, isLoading } = useQuery({
+  const [cookingOpen, setCookingOpen] = useState(false)
+
+  // Access favorites/history without assuming exact method names on context types
+  const favoritesCtx: any = useFavorites() as any
+  const historyCtx: any = useHistory() as any
+
+  const isFavorite: (rid: string) => boolean =
+    typeof favoritesCtx?.isFavorite === "function"
+      ? favoritesCtx.isFavorite
+      : () => false
+
+  const addFavoriteFn: any =
+    favoritesCtx?.add ?? favoritesCtx?.addFavorite ?? favoritesCtx?.save ?? null
+
+  const removeFavoriteFn: any =
+    favoritesCtx?.remove ?? favoritesCtx?.removeFavorite ?? favoritesCtx?.unsave ?? null
+
+  // Our HistoryProvider exposes addToHistory(id). Keep it single-call to avoid duplicate server logs.
+  const addHistoryEntryFn = typeof historyCtx?.addToHistory === "function" ? historyCtx.addToHistory : null
+
+  const {
+    data: recipe,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ["recipe", id],
     queryFn: () => apiGetRecipe(id),
+    retry: 2,
   })
 
+  const addedToHistoryRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (recipe?.id && typeof addHistoryEntryFn === "function") {
+      try { addHistoryEntryFn((recipe as any).id) } catch {}
+      addedToHistoryRef.current = (recipe as any).id
+    }
+    // we deliberately exclude addHistoryEntryFn from deps to avoid re-runs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipe])
+
   const toggleSave = useMutation({
-    mutationFn: () => apiToggleSave(id),
+    mutationFn: async () => {
+      if (!(recipe as any)?.id) return
+      const rid = (recipe as any).id as string
+      const currentlyFav = isFavorite(rid)
+
+      // Backend toggle (expects a single id argument)
+      await apiToggleSave(rid)
+
+      // Best-effort local update if context provides helpers
+      const favPayload = {
+        id: rid,
+        title: (recipe as any)?.title,
+        image:
+          (recipe as any)?.image_url ??
+          (Array.isArray((recipe as any)?.images) && (recipe as any).images.length
+            ? (recipe as any).images[0]
+            : null),
+      }
+
+      try {
+        if (currentlyFav) {
+          if (typeof removeFavoriteFn === "function") {
+            try { removeFavoriteFn(rid) } catch { removeFavoriteFn(favPayload) }
+          }
+        } else {
+          if (typeof addFavoriteFn === "function") {
+            try { addFavoriteFn(favPayload) } catch { addFavoriteFn(rid) }
+          }
+        }
+      } catch {}
+    },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["recipe", id] })
-      qc.invalidateQueries({ queryKey: ["recipes"] })
-      qc.invalidateQueries({ queryKey: ["saved"] })
+      queryClient.invalidateQueries({ queryKey: ["recipe", id] })
+      toast({ title: "Saved", description: "Recipe save state updated." })
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Could not update saved state.", variant: "destructive" })
     },
   })
 
-  const [cookingOpen, setCookingOpen] = useState(false)
-  const [checkedIngredients, setCheckedIngredients] = useState<Record<string, boolean>>({})
+  const handleShare = async () => {
+    const shareUrl = typeof window !== "undefined" ? window.location.href : ""
+    if ((navigator as any).share) {
+      try {
+        await (navigator as any).share({ title: (recipe as any)?.title ?? "Recipe", url: shareUrl })
+        toast({ title: "Shared", description: "Link copied to your share sheet." })
+      } catch {
+        // user cancelled share
+      }
+    } else {
+      try {
+        await navigator.clipboard.writeText(shareUrl)
+        toast({ title: "Copied", description: "Link copied to clipboard." })
+      } catch {
+        toast({ title: "Error", description: "Failed to copy link to clipboard.", variant: "destructive" })
+      }
+    }
+  }
 
-  if (isLoading || !recipe) {
+  if (isLoading) {
     return (
-      <div>
-        <AppHeader />
-        <div className="container p-4">
-          <div className="h-64 bg-muted animate-pulse rounded" />
+      <div className="mx-auto w-full max-w-6xl lg:max-w-7xl px-4 py-8">
+        <div className="space-y-6">
+          <div className="h-8 w-40 bg-muted rounded" />
+          <div className="h-64 md:h-80 lg:h-96 w-full bg-muted rounded" />
+          <div className="h-10 w-56 bg-muted rounded" />
         </div>
       </div>
     )
   }
 
-  const totalTime = recipe.prepTime + recipe.cookTime
-
-  async function share() {
-    const shareData = {
-      title: recipe.title,
-      text: `Check out this recipe: ${recipe.title}`,
-      url: typeof window !== "undefined" ? window.location.href : "",
-    }
-    if (navigator.share) {
-      try {
-        await navigator.share(shareData as any)
-      } catch {
-        // user cancelled
-      }
-    } else {
-      try {
-        await navigator.clipboard.writeText(shareData.url || "")
-        toast({ title: "Link copied", description: "Recipe link copied to clipboard." })
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  return (
-    <div className="pb-24">
-      <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur">
-        <div className="container flex h-12 items-center gap-2 px-4">
-          <Button variant="ghost" size="icon" aria-label="Go back" onClick={() => router.back()}>
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
-          <h1 className="flex-1 truncate font-semibold">{recipe.title}</h1>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={recipe.isSaved ? "Unsave recipe" : "Save recipe"}
-            onClick={() => toggleSave.mutate()}
-          >
-            <Heart className={"h-5 w-5" + (recipe.isSaved ? " fill-rose-600 text-rose-600" : "")} />
-          </Button>
-          <Button variant="ghost" size="icon" aria-label="Share recipe" onClick={share}>
-            <Share2 className="h-5 w-5" />
+  if (error || !recipe) {
+    return (
+      <div className="mx-auto w-full max-w-6xl lg:max-w-7xl px-4 py-8">
+        <div className="flex items-center justify-between mb-6">
+          <Button onClick={() => router.back()} variant="outline">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Go Back
           </Button>
         </div>
-      </header>
-
-      <div className="relative w-full">
-        <Image
-          src={recipe.imageUrl || "/placeholder.svg?height=720&width=1280&query=recipe%20hero"}
-          alt={recipe.title}
-          width={1280}
-          height={720}
-          className="w-full aspect-[16/9] object-cover"
-          priority
-        />
+        <p className="text-destructive">Could not load the recipe.</p>
       </div>
+    )
+  }
 
-      <main className="container px-4 py-4 space-y-6">
-        <section aria-label="Recipe metadata" className="grid grid-cols-2 sm:flex sm:flex-wrap gap-4 text-sm">
-          <div className="inline-flex items-center gap-2">
-            <Clock className="h-4 w-4" /> Prep {recipe.prepTime}m
-          </div>
-          <div className="inline-flex items-center gap-2">
-            <Clock className="h-4 w-4" /> Cook {recipe.cookTime}m
-          </div>
-          <div className="inline-flex items-center gap-2">
-            <Users className="h-4 w-4" /> Servings {recipe.servings}
-          </div>
-          <div className="inline-flex items-center gap-2 capitalize">
-            <Flame className="h-4 w-4" /> {recipe.difficulty}
-          </div>
-          <div className="inline-flex items-center gap-2">
-            <Clock className="h-4 w-4" /> Total {totalTime}m
-          </div>
-        </section>
+  const steps: string[] =
+    Array.isArray((recipe as any)?.instructions)
+      ? (recipe as any).instructions
+      : Array.isArray((recipe as any)?.steps)
+      ? (recipe as any).steps
+      : [];
 
-        <Tabs defaultValue="ingredients" className="w-full">
-          <TabsList className="grid grid-cols-3 w-full">
-            <TabsTrigger value="ingredients">Ingredients</TabsTrigger>
-            <TabsTrigger value="instructions">Instructions</TabsTrigger>
-            <TabsTrigger value="nutrition">Nutrition</TabsTrigger>
-          </TabsList>
-          <TabsContent value="ingredients" className="pt-4">
-            <ul className="grid gap-2">
-              {recipe.ingredients.map((ing) => {
-                const checked = !!checkedIngredients[ing.id]
-                return (
-                  <li key={ing.id} className="flex items-start gap-3 rounded border p-2">
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={(v) => setCheckedIngredients((prev) => ({ ...prev, [ing.id]: !!v }))}
-                      aria-label={`Mark ${ing.name} as acquired`}
-                    />
-                    <div>
-                      <div className={checked ? "line-through text-muted-foreground" : ""}>{ing.name}</div>
-                      {ing.amount && <div className="text-xs text-muted-foreground">{ing.amount}</div>}
-                    </div>
-                  </li>
-                )
-              })}
-            </ul>
-          </TabsContent>
-          <TabsContent value="instructions" className="pt-4">
-            <ol className="list-decimal pl-6 space-y-3">
-              {recipe.instructions.map((step, idx) => (
-                <li key={idx} className="leading-relaxed">
-                  {step}
-                </li>
-              ))}
-            </ol>
-          </TabsContent>
-          <TabsContent value="nutrition" className="pt-4">
-            <div className="grid sm:grid-cols-2 gap-4">
-              <div className="rounded border p-4">
-                <h3 className="font-semibold mb-2">Macros</h3>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>Calories</div>
-                  <div className="justify-self-end">{recipe.nutrition.calories} kcal</div>
-                  <div>Protein</div>
-                  <div className="justify-self-end">{recipe.nutrition.protein} g</div>
-                  <div>Carbs</div>
-                  <div className="justify-self-end">{recipe.nutrition.carbs} g</div>
-                  <div>Fat</div>
-                  <div className="justify-self-end">{recipe.nutrition.fat} g</div>
-                </div>
-              </div>
-              <div className="rounded border p-4">
-                <h3 className="font-semibold mb-2">Allergens</h3>
-                {recipe.nutrition.allergens.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No common allergens.</p>
-                ) : (
-                  <ul className="list-disc pl-5 text-sm">
-                    {recipe.nutrition.allergens.map((a) => (
-                      <li key={a}>{a}</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          </TabsContent>
-        </Tabs>
-      </main>
+  // Normalize for RecipeHero
+  const heroRecipe = {
+    ...(recipe as any),
+    imageUrl:
+      (recipe as any)?.imageUrl ??
+      (recipe as any)?.image_url ??
+      (Array.isArray((recipe as any)?.images) && (recipe as any).images.length
+        ? (recipe as any).images[0]
+        : undefined),
+    imageAlt: (recipe as any)?.title ?? "Recipe image",
+    // Use Favorites context for current saved state to ensure the heart reflects immediately.
+    isSaved: isFavorite((recipe as any).id),
+  };
 
-      <Separator />
-
-      <div className="fixed bottom-20 right-4 sm:bottom-6 sm:right-6">
-        <Button size="lg" onClick={() => setCookingOpen(true)} className="shadow-lg">
-          Start Cooking
+  return (
+    <div className="mx-auto w-full max-w-6xl lg:max-w-7xl px-4 py-8">
+      {/* Back Button */}
+      <div className="mb-8">
+        <Button variant="ghost" onClick={() => router.back()} className="pl-0">
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Back to recipes
         </Button>
       </div>
 
-      <StartCookingOverlay open={cookingOpen} onOpenChange={setCookingOpen} steps={recipe.instructions} />
+      <div className="space-y-10">
+        {/* Recipe Hero */}
+        <RecipeHero recipe={heroRecipe} onToggleSave={() => toggleSave.mutate()} onShare={handleShare} />
+
+        {/* Recipe Tabs */}
+        <RecipeTabs recipe={recipe as any} />
+
+        {/* Start Cooking Button */}
+        <div className="flex justify-center pt-6">
+          <Button size="lg" onClick={() => setCookingOpen(true)}>
+            Start Cooking
+          </Button>
+        </div>
+      </div>
+
+      {/* Cooking Overlay */}
+      <StartCookingOverlay
+        open={cookingOpen}
+        onOpenChange={setCookingOpen}
+        steps={steps}
+        recipeTitle={(recipe as any).title}
+      />
     </div>
   )
 }

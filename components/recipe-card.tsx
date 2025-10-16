@@ -5,51 +5,65 @@ import Link from "next/link"
 import { Card, CardContent, CardFooter } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Clock, Flame, Soup, Heart } from "lucide-react"
+import { Clock, Flame, Soup, Heart, Star } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { Difficulty } from "@/lib/types"
+import { DEFAULT_RECIPE_IMAGE } from "@/lib/constants"
 
 export type RecipeCardProps = {
   id: string
-  title: string
-  imageUrl?: string
-  prepTime: number
-  cookTime: number
-  servings: number
-  difficulty: Difficulty
-  isSaved: boolean
+  href?: string 
+  title?: string
+  imageUrl?: string | null
+  prepTime?: number
+  cookTime?: number
+  servings?: number
+  difficulty?: Difficulty
+  isSaved?: boolean
   onSave: (id: string) => void
-  tags: string[]
+  tags?: string[]
+  score?: number
 }
 
 export function RecipeCard({
   id,
-  title,
-  imageUrl,
-  prepTime,
-  cookTime,
-  servings,
-  difficulty,
-  isSaved,
+  title = "Untitled",
+  imageUrl = "/placeholder.svg",
+  prepTime = 0,
+  cookTime = 0,
+  servings = 1,
+  difficulty = "easy",
+  isSaved = false,
   onSave,
-  tags,
+  tags = [],
+  score,
+  href,
 }: RecipeCardProps) {
   const totalTime = prepTime + cookTime
   const shown = tags.slice(0, 3)
   const rest = tags.length - shown.length
+  const linkHref = href ?? `/recipes/${id}`;
 
   return (
     <Card className="overflow-hidden group focus-within:ring-2 focus-within:ring-ring">
-      <Link href={`/recipes/${id}`} className="block">
+      <Link href={linkHref} prefetch={false} className="block">
         <div className="relative aspect-[16/9] w-full overflow-hidden">
           <Image
-            src={imageUrl || "/placeholder.svg?height=360&width=640&query=recipe%20image"}
+            src={DEFAULT_RECIPE_IMAGE}
             alt={title}
             fill
             className="object-cover transition-transform duration-300 motion-reduce:transition-none group-hover:scale-105"
             sizes="(max-width: 640px) 100vw, 33vw"
             priority={false}
           />
+          {score !== undefined && (
+            <div className="absolute top-2 right-2">
+              <Badge variant="secondary" className="bg-black/70 text-white border-0 text-xs">
+                <Star className="w-3 h-3 mr-1" />
+                {Math.round(score * 100)}
+              </Badge>
+            </div>
+          )}
         </div>
       </Link>
       <CardContent className="p-3">
